@@ -41,7 +41,7 @@ servers, how to spread traffic across them, and optional rate limits and health 
 
 ## Requirements
 
-- Rust **1.85 or newer** (the crate uses the 2024 edition). Install with [rustup](https://rustup.rs).
+- Rust **1.88 or newer** (the crate uses the 2024 edition and let-chains). Install with [rustup](https://rustup.rs).
 - A C compiler and **CMake**, which some of Pingora's native dependencies need at build time.
   - Debian/Ubuntu: `sudo apt install build-essential cmake`
   - Fedora: `sudo dnf install gcc gcc-c++ cmake`
@@ -233,10 +233,31 @@ cargo test config_        # only config tests
 cargo test e2e_           # only end-to-end tests
 ```
 
+### Continuous integration
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs on every push to `master`, on every pull
+request, and on demand (`workflow_dispatch`). It builds and checks the code but does **not** deploy.
+
+| Job              | What it checks                                                              |
+| ---------------- | --------------------------------------------------------------------------- |
+| Format           | `cargo fmt --check`                                                         |
+| Clippy           | `cargo clippy --all-targets`, with warnings treated as errors               |
+| Test             | `cargo test` on Ubuntu and macOS                                            |
+| Minimum Rust     | The crate still compiles with Rust 1.88 (`rust-version` in Cargo.toml)      |
+| Release build    | `cargo build --release`, uploads the Linux binary as a 7-day artifact       |
+| Security audit   | Dependencies checked against the RustSec advisory database                  |
+
+To make CI block merges, enable branch protection on `master` in the GitHub repo settings and mark
+these jobs as required checks.
+
 ## Project layout
 
 ```
 .
+├── .github/workflows/
+│   └── ci.yml            # CI: fmt, clippy, test, MSRV, release build, audit
+├── .githooks/
+│   └── pre-push          # runs cargo test, blocks the push on failure
 ├── Cargo.toml
 ├── rustfmt.toml          # formatting rules (max width 100)
 ├── config/
@@ -249,10 +270,12 @@ cargo test e2e_           # only end-to-end tests
 
 ## Contributing
 
+0. **Enable the git hooks** (once per clone): `git config core.hooksPath .githooks`. The
+   [pre-push hook](.githooks/pre-push) runs `cargo test` and blocks the push if any test fails.
 1. **Branch** off `master`: `git checkout -b feature/short-description`.
 2. **Keep it formatted**: run `cargo fmt` before committing. The rules are in
    [rustfmt.toml](rustfmt.toml).
-3. **Lint it**: run `cargo clippy --all-targets` and don't introduce new warnings.
+3. **Lint it**: run `cargo clippy --all-targets -- -D warnings`; CI fails on any warning.
 4. **Test your change**: add or update tests in [src/tests.rs](src/tests.rs), and make sure
    `cargo test` passes. New config options need a parsing test; new request behaviour needs an
    `e2e_*` test.

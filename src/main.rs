@@ -230,11 +230,11 @@ impl ProxyHttp for Router {
             .map(|addr| addr.ip().to_string())
             .unwrap_or_default();
 
-        if let Some(limiter) = &self.routes[index].rate_limiter {
-            if limiter.rate.observe(&ctx.client_ip, 1) > limiter.max_requests {
-                session.respond_error(429).await?;
-                return Ok(true);
-            }
+        if let Some(limiter) = &self.routes[index].rate_limiter
+            && limiter.rate.observe(&ctx.client_ip, 1) > limiter.max_requests
+        {
+            session.respond_error(429).await?;
+            return Ok(true);
         }
         Ok(false)
     }
@@ -320,7 +320,7 @@ fn build_server(raw: &str) -> Server {
     {
         router
             .routes
-            .sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+            .sort_by_key(|route| std::cmp::Reverse(route.path.len()));
         let mut service = http_proxy_service_with_name(&server.configuration, router, &listen);
         match tls {
             Some(tls) => {
