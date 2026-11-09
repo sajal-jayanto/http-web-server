@@ -3,11 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use pingora::apps::HttpServerOptions;
 use pingora::lb::health_check::{HttpHealthCheck, TcpHealthCheck};
 use pingora::lb::selection::{
     BackendIter, BackendSelection, Consistent, FNVHash, Random, RoundRobin,
 };
 use pingora::lb::{Backend, LoadBalancer};
+use pingora::listeners::tls::TlsSettings;
 use pingora::prelude::*;
 use pingora::proxy::http_proxy_service_with_name;
 use pingora::server::configuration::{Opt, ServerConf};
@@ -28,7 +30,17 @@ struct ClusterConfig {
     name: String,
     #[serde(deserialize_with = "listen_addr")]
     listen: String,
+    tls: Option<TlsConfig>,
+    #[serde(default)]
+    http2: bool,
     routes: Vec<RouteConfig>,
+}
+
+/// Optional HTTPS for a listener. Without it the listener speaks plain HTTP.
+#[derive(Deserialize, Clone, PartialEq, Debug)]
+struct TlsConfig {
+    cert: String,
+    key: String,
 }
 
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -182,7 +194,14 @@ fn path_matches(prefix: &str, path: &str) -> bool {
 }
 
 struct Router {
-    routes: Vec<Route>, 
+    routes: Vec<Route>,
+}
+
+/// One listen address: its protocol settings plus the routes of every cluster on it.
+struct Listener {
+    tls: Option<TlsConfig>,
+    http2: bool,
+    router: Router,
 }
 
 #[derive(Default)]
@@ -256,11 +275,22 @@ fn build_server(raw: &str) -> Server {
     let mut server = Server::new_with_opt_and_conf(Opt::default(), server_conf(raw));
     server.bootstrap();
 
-    let mut routers: BTreeMap<String, Router> = BTreeMap::new();
+    let mut listeners: BTreeMap<String, Listener> = BTreeMap::new();
     for cluster in config.clusters {
-        let router = routers
-            .entry(cluster.listen)
-            .or_insert(Router { routes: vec![] });
+        let listener = listeners
+            .entry(cluster.listen.clone())
+            .or_insert_with(|| Listener {
+                tls: cluster.tls.clone(),
+                http2: cluster.http2,
+                router: Router { routes: vec![] },
+            });
+        if listener.tls != cluster.tls || listener.http2 != cluster.http2 {
+            panic!(
+                "{}: tls/http2 differ from another cluster on {}",
+                cluster.name, cluster.listen
+            );
+        }
+        let router = &mut listener.router;
 
         for route in cluster.routes {
             let name = format!("{} {}", cluster.name, route.path);
@@ -281,12 +311,45 @@ fn build_server(raw: &str) -> Server {
         }
     }
 
-    for (listen, mut router) in routers {
+    for (
+        listen,
+        Listener {
+            tls,
+            http2,
+            mut router,
+        },
+    ) in listeners
+    {
         router
             .routes
             .sort_by(|a, b| b.path.len().cmp(&a.path.len()));
         let mut service = http_proxy_service_with_name(&server.configuration, router, &listen);
-        service.add_tcp(&listen);
+        match tls {
+            Some(tls) => {
+                // rustls reads the files lazily; load them now so bad paths fail at startup
+                match pingora::tls::load_certs_and_key_files(&tls.cert, &tls.key) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => panic!("{listen}: bad tls cert/key: no certificate or key found"),
+                    Err(e) => panic!("{listen}: bad tls cert/key: {e}"),
+                }
+                let mut settings = TlsSettings::intermediate(&tls.cert, &tls.key)
+                    .unwrap_or_else(|e| panic!("{listen}: bad tls cert/key: {e}"));
+                if http2 {
+                    // ALPN: offer h2, fall back to http/1.1
+                    settings.enable_h2();
+                }
+                service.add_tls_with_settings(&listen, None, settings);
+            }
+            None => {
+                if http2 {
+                    // cleartext HTTP/2 (h2c, prior knowledge); HTTP/1.1 still works
+                    let mut options = HttpServerOptions::default();
+                    options.h2c = true;
+                    service.app_logic_mut().unwrap().server_options = Some(options);
+                }
+                service.add_tcp(&listen);
+            }
+        }
         server.add_service(service);
     }
 

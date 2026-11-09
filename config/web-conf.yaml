@@ -10,6 +10,15 @@ threads: 2
 #   listen - port to accept requests on, e.g. 8080 (host defaults to
 #            0.0.0.0 = all interfaces). A full host:port also works,
 #            e.g. 127.0.0.1:8080 to accept only local requests.
+#   tls    - (optional, default: off = plain HTTP) serve HTTPS on this
+#            listen address:
+#              cert - path to the PEM certificate (chain)
+#              key  - path to the PEM private key
+#   http2  - (optional, default: false = HTTP/1.1 only) also accept HTTP/2.
+#            With tls it is negotiated via ALPN (h2, falling back to
+#            http/1.1). Without tls it is cleartext h2c (prior knowledge),
+#            and HTTP/1.1 clients still work.
+#            Clusters sharing a listen address must use the same tls/http2.
 #   routes - list of routes (below)
 #
 # route:
@@ -37,6 +46,10 @@ threads: 2
 clusters:
   - name: myserviec
     listen: 8080
+    # http2: true
+    # tls:
+    #   cert: certs/server.crt
+    #   key: certs/server.key
     routes:
       - path: /api
         rate_limit:

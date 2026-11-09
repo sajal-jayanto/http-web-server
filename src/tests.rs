@@ -196,6 +196,37 @@ fn config_listen_rejects_bad_port() {
 }
 
 #[test]
+fn config_tls_and_http2_are_optional() {
+    let config = parse(
+        "
+clusters:
+  - { name: plain, listen: 8080, routes: [] }
+  - name: secure
+    listen: 8443
+    http2: true
+    tls: { cert: certs/server.crt, key: certs/server.key }
+    routes: []
+",
+    );
+    let (plain, secure) = (&config.clusters[0], &config.clusters[1]);
+    assert!(plain.tls.is_none());
+    assert!(!plain.http2, "HTTP/1.1 only by default");
+
+    assert!(secure.http2);
+    let tls = secure.tls.as_ref().unwrap();
+    assert_eq!(tls.cert, "certs/server.crt");
+    assert_eq!(tls.key, "certs/server.key");
+}
+
+#[test]
+fn config_tls_requires_cert_and_key() {
+    let result: Result<Config, _> = serde_yaml::from_str(
+        "clusters: [{ name: a, listen: 8443, tls: { cert: a.crt }, routes: [] }]",
+    );
+    assert!(result.is_err(), "tls without key should be rejected");
+}
+
+#[test]
 fn config_route_defaults() {
     let route = route("upstreams: [127.0.0.1:3000]");
     assert_eq!(route.path, "/");
@@ -434,6 +465,39 @@ clusters:
 }
 
 #[test]
+#[should_panic(expected = "tls/http2 differ")]
+fn clusters_sharing_listen_must_agree_on_protocol() {
+    build_server(
+        "
+version: 1
+clusters:
+  - name: a
+    listen: 127.0.0.1:1
+    routes: [{ path: /a, upstreams: [127.0.0.1:3000] }]
+  - name: b
+    listen: 127.0.0.1:1
+    http2: true
+    routes: [{ path: /b, upstreams: [127.0.0.1:3001] }]
+",
+    );
+}
+
+#[test]
+#[should_panic(expected = "bad tls cert/key")]
+fn missing_tls_files_panic() {
+    build_server(
+        "
+version: 1
+clusters:
+  - name: a
+    listen: 127.0.0.1:1
+    tls: { cert: /nonexistent/server.crt, key: /nonexistent/server.key }
+    routes: [{ path: /, upstreams: [127.0.0.1:3000] }]
+",
+    );
+}
+
+#[test]
 #[should_panic(expected = "invalid config")]
 fn invalid_yaml_panics() {
     build_server("version: 1\nclusters: not-a-list");
@@ -655,4 +719,58 @@ clusters:
 
     // no healthy upstream left -> the proxy cannot pick a peer
     assert_eq!(get(port, "/all-down").0, 500);
+}
+
+/// Opens an HTTP/2 cleartext connection (prior knowledge) and returns the type of
+/// the first frame the server sends back. An HTTP/2 server must start with SETTINGS (0x4).
+fn h2c_first_frame_type(port: u16) -> Option<u8> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+        .unwrap();
+    // empty SETTINGS frame: length 0, type 0x4, flags 0, stream 0
+    stream.write_all(&[0, 0, 0, 0x4, 0, 0, 0, 0, 0]).unwrap();
+    let mut header = [0u8; 9];
+    stream.read_exact(&mut header).ok()?;
+    Some(header[3])
+}
+
+#[test]
+fn e2e_http2_cleartext_when_enabled_and_http1_still_works() {
+    let upstream = mock_upstream("up", true);
+    let (h1_port, h2_port) = (free_port(), free_port());
+    start_proxy(
+        format!(
+            "
+version: 1
+threads: 1
+clusters:
+  - name: h1
+    listen: {h1_port}
+    routes: [{{ path: /, upstreams: [{upstream}] }}]
+  - name: h2
+    listen: {h2_port}
+    http2: true
+    routes: [{{ path: /, upstreams: [{upstream}] }}]
+"
+        ),
+        &[h1_port, h2_port],
+    );
+
+    assert_eq!(
+        h2c_first_frame_type(h2_port),
+        Some(0x4),
+        "expected SETTINGS"
+    );
+    assert_ne!(
+        h2c_first_frame_type(h1_port),
+        Some(0x4),
+        "HTTP/2 must be off by default"
+    );
+    // HTTP/1.1 clients are still served on the HTTP/2-enabled listener
+    assert_eq!(get(h2_port, "/"), (200, "up".into()));
+    assert_eq!(get(h1_port, "/"), (200, "up".into()));
 }

@@ -28,6 +28,9 @@ servers, how to spread traffic across them, and optional rate limits and health 
 ## Features
 
 - **Multiple listeners**: run any number of clusters, each on its own port or address.
+- **Optional TLS (HTTPS)** per listener, from a certificate and key file.
+- **Optional HTTP/2**: HTTP/1.1 by default; turn on HTTP/2 per listener (ALPN over TLS,
+  or cleartext h2c).
 - **Path-prefix routing**: the longest matching prefix wins; anything unmatched gets `404`.
 - **Four load-balancing algorithms**: `round_robin`, `random`, `hash` (sticky by client IP) and
   `consistent` (sticky, with less reshuffling when upstreams change).
@@ -105,10 +108,49 @@ can be added at the top level too.
 | -------- | -------- | ------------------------------------------------------------------------------------------------ |
 | `name`   | yes      | Label used in health-check service names and error messages.                                     |
 | `listen` | yes      | A port (`8080`, binds `0.0.0.0`) or a full `host:port` (`127.0.0.1:8080` for local-only access). |
+| `tls`    | no       | Serve HTTPS. See [TLS and HTTP/2](#tls-and-http2). Without it the listener is plain HTTP.        |
+| `http2`  | no       | `true` to also accept HTTP/2. Default `false` (HTTP/1.1 only).                                   |
 | `routes` | yes      | List of routes, see below.                                                                       |
 
-Two clusters may use the same `listen` address; their routes are merged into one listener. A
-path may appear only once per listen address, otherwise the server refuses to start.
+Two clusters may use the same `listen` address; their routes are merged into one listener. They
+must then use the same `tls` and `http2` settings. A path may appear only once per listen address,
+otherwise the server refuses to start.
+
+### TLS and HTTP/2
+
+```yaml
+clusters:
+  - name: web
+    listen: 8443
+    http2: true                 # optional, default false
+    tls:                        # optional, default plain HTTP
+      cert: certs/server.crt    # PEM certificate (chain)
+      key: certs/server.key     # PEM private key
+    routes:
+      - path: /
+        upstreams: [127.0.0.1:3005]
+```
+
+| `tls` | `http2` | What clients can use                                                        |
+| ----- | ------- | --------------------------------------------------------------------------- |
+| no    | `false` | HTTP/1.1 (the default)                                                      |
+| no    | `true`  | HTTP/1.1, or cleartext HTTP/2 with prior knowledge (h2c)                    |
+| yes   | `false` | HTTPS with HTTP/1.1                                                         |
+| yes   | `true`  | HTTPS with HTTP/2 or HTTP/1.1, picked via ALPN                              |
+
+TLS uses [rustls](https://github.com/rustls/rustls), so no system OpenSSL is needed. A missing or
+invalid certificate or key stops the server at startup. TLS ends at the proxy: traffic to the
+upstreams is still plain HTTP/1.1.
+
+To try it locally with a self-signed certificate:
+
+```bash
+mkdir -p certs
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost" \
+  -keyout certs/server.key -out certs/server.crt
+curl -k --http2 https://localhost:8443/     # -k: accept the self-signed cert
+curl --http2-prior-knowledge http://localhost:8080/   # h2c, on a listener with http2: true
+```
 
 ### Routes
 
@@ -224,7 +266,7 @@ Code style notes:
 
 ## Known limitations
 
-- No TLS: the proxy listens and talks to upstreams over plain HTTP only.
+- The proxy talks to upstreams over plain HTTP/1.1 only (no upstream TLS or HTTP/2).
 - Configuration is read once at startup; restart the server to apply changes.
 - Rate limiting and `hash`/`consistent` balancing key on the connecting IP. Behind another proxy
   or load balancer, every client shares that proxy's IP.
