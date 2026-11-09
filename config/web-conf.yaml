@@ -1,0 +1,58 @@
+# Pingora server settings
+version: 1
+threads: 2
+
+# Clusters: each one accepts requests on a listen address and sends them to
+# routes by path. Add as many clusters and routes as you need.
+#
+# cluster:
+#   name   - used in logs and error messages
+#   listen - port to accept requests on, e.g. 8080 (host defaults to
+#            0.0.0.0 = all interfaces). A full host:port also works,
+#            e.g. 127.0.0.1:8080 to accept only local requests.
+#   routes - list of routes (below)
+#
+# route:
+#   path        - (optional, default: /) path prefix for this route. The
+#                 longest matching prefix wins; no match -> 404. The path is
+#                 forwarded as-is (/api/users stays /api/users).
+#   upstreams   - servers to load-balance across
+#
+#   algorithm (optional, default: round_robin):
+#     round_robin - each request goes to the next upstream in turn
+#     random      - pick a random upstream per request
+#     hash        - same client IP always goes to the same upstream
+#     consistent  - like hash, but adding/removing an upstream moves fewer clients
+#
+#   rate_limit (optional, default: no limit):
+#     requests    - max requests per client IP within the window; extra
+#                   requests get "429 Too Many Requests"
+#     window_secs - length of the window in seconds, default: 1
+#
+#   health_check (optional, default: no checks, all upstreams assumed healthy):
+#     type          - tcp (can connect) or http (GET returns 200), default: tcp
+#     path          - URL path for http checks, default: /
+#     interval_secs - seconds between checks, default: 5
+#     Unhealthy upstreams get no traffic until they pass a check again.
+clusters:
+  - name: myserviec
+    listen: 8080
+    routes:
+      - path: /api
+        rate_limit:
+          requests: 100
+          window_secs: 60
+        health_check:
+          type: http
+          path: /health
+          interval_secs: 5
+        algorithm: round_robin
+        upstreams:
+          - 127.0.0.1:3000
+          - 127.0.0.1:3001
+
+      - path: /
+        algorithm: round_robin
+        upstreams:
+          - 127.0.0.1:3005
+          - 127.0.0.1:3006
