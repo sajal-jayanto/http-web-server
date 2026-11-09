@@ -36,7 +36,6 @@ struct ClusterConfig {
     routes: Vec<RouteConfig>,
 }
 
-/// Optional HTTPS for a listener. Without it the listener speaks plain HTTP.
 #[derive(Deserialize, Clone, PartialEq, Debug)]
 struct TlsConfig {
     cert: String,
@@ -197,7 +196,6 @@ struct Router {
     routes: Vec<Route>,
 }
 
-/// One listen address: its protocol settings plus the routes of every cluster on it.
 struct Listener {
     tls: Option<TlsConfig>,
     http2: bool,
@@ -235,7 +233,7 @@ impl ProxyHttp for Router {
         if let Some(limiter) = &self.routes[index].rate_limiter {
             if limiter.rate.observe(&ctx.client_ip, 1) > limiter.max_requests {
                 session.respond_error(429).await?;
-                return Ok(true); // response sent, stop here
+                return Ok(true);
             }
         }
         Ok(false)
@@ -326,7 +324,6 @@ fn build_server(raw: &str) -> Server {
         let mut service = http_proxy_service_with_name(&server.configuration, router, &listen);
         match tls {
             Some(tls) => {
-                // rustls reads the files lazily; load them now so bad paths fail at startup
                 match pingora::tls::load_certs_and_key_files(&tls.cert, &tls.key) {
                     Ok(Some(_)) => {}
                     Ok(None) => panic!("{listen}: bad tls cert/key: no certificate or key found"),
@@ -335,14 +332,12 @@ fn build_server(raw: &str) -> Server {
                 let mut settings = TlsSettings::intermediate(&tls.cert, &tls.key)
                     .unwrap_or_else(|e| panic!("{listen}: bad tls cert/key: {e}"));
                 if http2 {
-                    // ALPN: offer h2, fall back to http/1.1
                     settings.enable_h2();
                 }
                 service.add_tls_with_settings(&listen, None, settings);
             }
             None => {
                 if http2 {
-                    // cleartext HTTP/2 (h2c, prior knowledge); HTTP/1.1 still works
                     let mut options = HttpServerOptions::default();
                     options.h2c = true;
                     service.app_logic_mut().unwrap().server_options = Some(options);
