@@ -5,10 +5,10 @@ You describe everything in a single YAML file: which ports to listen on, which p
 servers, how to spread traffic across them, and optional rate limits and health checks.
 
 ```
-              ┌──────────────────────────── :8080 ─────────────────────────────┐
+              ┌──────────────────────────── :8080 ──────────────────────────────┐
  client ───▶  │  /api/*  ──▶ rate limit ──▶ round robin ──▶ 127.0.0.1:3000      │
               │                                         └─▶ 127.0.0.1:3001      │
-              │  /*      ──────────────────▶ round robin ──▶ 127.0.0.1:3005      │
+              │  /*      ──────────────────▶ round robin ──▶ 127.0.0.1:3005     │
               │                                         └─▶ 127.0.0.1:3006      │
               └─────────────────────────────────────────────────────────────────┘
 ```
