@@ -138,11 +138,13 @@ clusters:
 | yes   | `false` | HTTPS with HTTP/1.1                                                         |
 | yes   | `true`  | HTTPS with HTTP/2 or HTTP/1.1, picked via ALPN                              |
 
-TLS uses [rustls](https://github.com/rustls/rustls), so no system OpenSSL is needed. A missing or
-invalid certificate or key stops the server at startup. TLS ends at the proxy: traffic to the
+TLS uses [rustls](https://github.com/rustls/rustls), so no system OpenSSL is needed. The `cert` and
+`key` paths are relative to the current working directory. A missing or invalid certificate or key
+stops the server at startup. TLS ends at the proxy: traffic to the
 upstreams is still plain HTTP/1.1.
 
-To try it locally with a self-signed certificate:
+To try it locally with a self-signed certificate (the `certs/` directory is git-ignored, so keys
+never get committed):
 
 ```bash
 mkdir -p certs
@@ -239,6 +241,7 @@ cargo test e2e_           # only end-to-end tests
 ├── rustfmt.toml          # formatting rules (max width 100)
 ├── config/
 │   └── web-conf.yaml     # default, fully commented config
+├── certs/                # local TLS cert/key (git-ignored, create it yourself)
 └── src/
     ├── main.rs           # config types, balancers, router, server setup
     └── tests.rs          # unit and end-to-end tests
@@ -246,7 +249,7 @@ cargo test e2e_           # only end-to-end tests
 
 ## Contributing
 
-1. **Branch** off `main`: `git checkout -b feature/short-description`.
+1. **Branch** off `master`: `git checkout -b feature/short-description`.
 2. **Keep it formatted**: run `cargo fmt` before committing. The rules are in
    [rustfmt.toml](rustfmt.toml).
 3. **Lint it**: run `cargo clippy --all-targets` and don't introduce new warnings.
@@ -267,6 +270,7 @@ Code style notes:
 ## Known limitations
 
 - The proxy talks to upstreams over plain HTTP/1.1 only (no upstream TLS or HTTP/2).
+- No automatic HTTP → HTTPS redirect; a listener is either plain HTTP or HTTPS.
 - Configuration is read once at startup; restart the server to apply changes.
 - Rate limiting and `hash`/`consistent` balancing key on the connecting IP. Behind another proxy
   or load balancer, every client shares that proxy's IP.
